@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.panda3d-cache/
+
+# Large source simulation data; runtime-ready assets live under models/.
+fire model/vdb/
+fire model/*.blend
+
+# Accidental path-mirror directories created by earlier tooling.
+"/
+random_files/"/
+

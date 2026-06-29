@@ -1,0 +1,8 @@
+{
+  "frame_count": 25,
+  "frame_rate": 3.0,
+  "source_frame_step": 8,
+  "voxel_size": 1.6,
+  "threshold": 0.15,
+  "adaptivity": 0.5
+}

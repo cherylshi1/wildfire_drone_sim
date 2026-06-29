@@ -1,0 +1,34 @@
+SWARM_DEMO_DECISIONS_DRONE_VISUAL_AND_PROPELLERS
+================================================
+
+Date: 2026-05-25
+Category: Drone visuals, propeller placement, render tuning
+
+1) Propeller placement coordinate-space decision
+- Rotor anchor bounds are computed in drone-model local space:
+  getTightBounds(drone_model)
+- Reason: avoid double-scaling/offset drift after parent rotation/scale.
+
+2) Vertical placement correction
+- Lowered rotor plane with local Y nudge:
+  DRONE_PROPELLER_Y_NUDGE_LOCAL = -0.45
+- Reason: user-reported "bottom too high" after front alignment looked correct.
+
+3) Tuning knobs for manual placement edits
+- DRONE_PROPELLER_X_OFFSET_FACTOR
+  - arm spread left/right
+- DRONE_PROPELLER_Z_OFFSET_FACTOR
+  - arm spread front/back
+- DRONE_PROPELLER_Y_TOP_MARGIN_FACTOR
+  - baseline height from top envelope
+- DRONE_PROPELLER_X_NUDGE_LOCAL
+  - shift all rotors together in local X
+- DRONE_PROPELLER_Y_NUDGE_LOCAL
+  - shift all rotors together in local Y (negative lowers)
+- DRONE_PROPELLER_Z_NUDGE_LOCAL
+  - shift all rotors together in local Z
+
+4) Practical tweak order
+- Step 1: keep X/Z offsets if footprint looks right.
+- Step 2: adjust Y_NUDGE_LOCAL by small increments (0.05-0.15).
+- Step 3: only then adjust Y_TOP_MARGIN_FACTOR for larger height moves.
