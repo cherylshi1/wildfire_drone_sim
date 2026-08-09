@@ -11,3 +11,6 @@ fire model/*.blend
 "/
 random_files/"/
 
+
+# Participant study data (PII): keep out of version control
+reports/
