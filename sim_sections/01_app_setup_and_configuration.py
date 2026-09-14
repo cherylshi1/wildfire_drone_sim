@@ -8,10 +8,6 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 
-RANDOM_FILES_DIR = Path(__file__).resolve().parent / "random_files"
-if RANDOM_FILES_DIR.exists():
-    sys.path.insert(0, str(RANDOM_FILES_DIR))
-
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
@@ -2006,5 +2002,4 @@ def burn_ratio():
     if burnable_total <= 0:
         return 0.0
     return min(1.0, len(fire_burned_cells) / burnable_total)
-
 

@@ -3,9 +3,14 @@ __pycache__/
 *.py[cod]
 .panda3d-cache/
 
-# Large source simulation data; runtime-ready assets live under models/.
-fire model/vdb/
-fire model/*.blend
+# Local-only source/intermediate assets. The public repo keeps the smaller
+# runtime release instead of raw source assets and old experiments.
+fire model/
+models/fire_baked_mesh_frames/
+models/fire_render_set/
+notes/
+random_files/
+dna.txt
 
 # Accidental path-mirror directories created by earlier tooling.
 "/
