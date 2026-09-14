@@ -65,22 +65,112 @@ def water_drones_were_involved():
     )
 
 
-def collaboration_base_points():
-    """Aug 9, 2026 (Cheryl): the base is no longer a fixed 40/67 water tier. It
-    IS the round's P1-P4 mission performance, out of 100, so the collaboration
-    score and the P1-P4 score overlap: a hands-off round scores exactly its
-    mission performance. The operator's own credit and cost are layered on top.
+# --- Calibration to a common full-auto anchor (Aug 18, 2026, Cheryl) ---------
+# Full automation scores a genuinely different raw P1-P4 on each stage, because
+# the stages are genuinely different difficulties (2/4/6 drones, water-only,
+# etc.). To make a participant's result comparable ACROSS stages, each stage's
+# measured hands-off baseline is mapped onto ONE common anchor, and the raw
+# score is shifted by the same amount:
+#
+#     calibrated = anchor + (raw - baseline[stage])
+#
+# So a hands-off round scores the anchor on EVERY stage, and a participant's
+# distance above/below the anchor is exactly what they added over the
+# automation, on one common scale (O'Neill et al. 2022: the human's value is
+# the team result minus automation-alone; Kahneman & Tversky 1979: judge a
+# result against its reference point). The operator credit/cost still layer on
+# top of the calibrated base.
+#
+# baseline[stage] = mean full-auto P1-P4 x 100, measured deterministically on
+# the fixed map. These built-in numbers are only fallbacks; the real ones must
+# be measured ON THE MACHINE THAT RUNS THE STUDY, because the 3D trees and
+# drones change how the automation flies. Measure and store them with one
+# command:  python3 scripts/headless_run.py calibrate
+# That writes calibration_baselines.json next to main.py, which is loaded below
+# and overrides these fallbacks, so full-auto lands on the anchor on your
+# machine and stays correct whenever you retune the fire, resources or team.
+STAGE_FULL_AUTO_BASELINE_SCORES = {
+    0: 46.6,   # DEMO practice (2 drones)
+    1: 65.7,   # 2 drones, water-only
+    2: 33.0,   # 2 drones, full control
+    3: 59.5,   # 4 drones
+    4: 56.7,   # 6 drones
+}
+# Load machine-measured baselines if present (written by the calibrate command).
+CALIBRATION_BASELINE_FILE = PROJECT_ROOT / "calibration_baselines.json"
+CALIBRATION_BASELINE_SOURCE = "built-in fallback"
+try:
+    if CALIBRATION_BASELINE_FILE.exists():
+        _loaded_baselines = json.loads(CALIBRATION_BASELINE_FILE.read_text(encoding="utf-8"))
+        for _stage_key, _score in (_loaded_baselines.get("baselines") or {}).items():
+            STAGE_FULL_AUTO_BASELINE_SCORES[int(_stage_key)] = float(_score)
+        CALIBRATION_BASELINE_SOURCE = "measured on this machine (%s)" % (
+            _loaded_baselines.get("measured_at", "date unknown")
+        )
+        # Baselines are specific to the round length (a 3-minute and a 10-minute
+        # round have different fire dynamics). Warn loudly if they were measured
+        # at a different profile than the one now running.
+        _baseline_minutes = _loaded_baselines.get("round_minutes")
+        _current_minutes = round_duration_seconds / 60.0
+        if _baseline_minutes is not None and abs(_baseline_minutes - _current_minutes) > 0.5:
+            print(
+                "[real-sim] WARNING: calibration_baselines.json was measured at a "
+                "%.0f-minute round but this round is %.0f minutes. The calibration "
+                "will be off. Re-run: python3 scripts/headless_run.py calibrate "
+                "under the same profile." % (_baseline_minutes, _current_minutes)
+            )
+except Exception as _baseline_error:
+    print("[real-sim] could not read calibration_baselines.json: %s" % _baseline_error)
+# The common anchor every stage's hands-off round maps to. Cheryl (Aug 18,
+# 2026) chose the current mean of the four scored stages (1-4) so no stage has
+# to move further than necessary. Override with REAL_SIM_CALIBRATION_ANCHOR.
+CALIBRATION_ANCHOR_SCORE = read_nonnegative_float_env(
+    "REAL_SIM_CALIBRATION_ANCHOR",
+    sum(STAGE_FULL_AUTO_BASELINE_SCORES[stage] for stage in (1, 2, 3, 4)) / 4.0,
+)
+# Master switch; set REAL_SIM_CALIBRATION=0 to report the raw P1-P4 base.
+CALIBRATION_ENABLED = read_bool_env("REAL_SIM_CALIBRATION", True)
 
-    The P1-P4 performance already responds to the round's difficulty factors
-    (fire spread rate, team size, drone speed, ground-crew and water-drone
-    suppression rates) because harder fires simply leave fewer points on P1-P4.
-    Turning those factors into an explicit, comparable calibration is the next
-    step (Cheryl's calibration task)."""
+
+def stage_full_auto_baseline_score():
+    """This stage's measured hands-off P1-P4 score (out of 100). Unknown stages
+    fall back to the anchor, so the calibration is a no-op for them."""
+    return STAGE_FULL_AUTO_BASELINE_SCORES.get(
+        selected_stage, CALIBRATION_ANCHOR_SCORE
+    )
+
+
+def raw_mission_score():
+    """The uncalibrated P1-P4 mission performance, out of 100."""
     performance = compute_performance_matrix(motion_state.sim_time_seconds)
     return clamp(performance["performance_score"] * 100.0, 0.0, 100.0)
 
 
+def calibrate_mission_score(raw_score):
+    """Shift a raw P1-P4 score so this stage's hands-off baseline lands on the
+    common anchor. Full auto -> anchor on every stage; a participant keeps the
+    exact distance above/below that the automation left on the table."""
+    if not CALIBRATION_ENABLED:
+        return clamp(raw_score, 0.0, 100.0)
+    shifted = CALIBRATION_ANCHOR_SCORE + (raw_score - stage_full_auto_baseline_score())
+    return clamp(shifted, 0.0, 100.0)
+
+
+def collaboration_base_points():
+    """The base the operator is judged against. Aug 18, 2026 (Cheryl): the base
+    is now the CALIBRATED mission score, so a hands-off round scores the common
+    anchor on every stage instead of the stage's raw P1-P4. That makes results
+    comparable across stages of different difficulty; the raw score, the stage
+    baseline and the anchor are all carried through to the report. The operator
+    credit and cost are still layered on top of this base."""
+    return calibrate_mission_score(raw_mission_score())
+
+
 def collaboration_base_label():
+    if CALIBRATION_ENABLED:
+        return "calibrated mission score (full-auto anchored to %.0f)" % (
+            CALIBRATION_ANCHOR_SCORE
+        )
     return "P1-P4 mission performance"
 
 
@@ -112,7 +202,9 @@ def compute_collaboration_score():
     (both dicts of labelled points) and the totals, so the report can show the
     full arithmetic instead of a bare number.
     """
-    base_points = collaboration_base_points()
+    raw_score = raw_mission_score()
+    stage_baseline = stage_full_auto_baseline_score()
+    base_points = calibrate_mission_score(raw_score)
     full_work = _collab_full_suppression_work_seconds()
 
     # --- operator credit ---
@@ -166,12 +258,30 @@ def compute_collaboration_score():
     credit_total = sum(credits.values())
     penalty_total = sum(penalties.values())
     operator_delta = credit_total - penalty_total
-    score = clamp(base_points + operator_delta, 0.0, 100.0)
+    # Aug 20, 2026 (Cheryl): OUTCOME-ONLY score. The manual-action point bonuses
+    # (+4/+6/-8/-5) are NOT added to the score. They were unbounded (holding the
+    # [J] spray could farm +56 and cap the score at 100) and they double-counted
+    # the mission outcome, since manual flying and spraying already raise P1-P4.
+    # The score is now purely the calibrated mission outcome; the operator's
+    # actions still help through P1-P4 and are reported as descriptive counts.
+    missed_fire_count = sum(
+        1
+        for hotspot in fire_hotspots
+        if hotspot.detection_time_seconds is None
+        or hotspot.suppression_state == FIRE_STATE_BURNED
+    )
+    score = clamp(base_points, 0.0, 100.0)
     return {
         "score": score,
         "base": base_points,
         "base_label": collaboration_base_label(),
+        "raw_mission_score": raw_score,
+        "stage_baseline_score": stage_baseline,
+        "calibration_anchor": CALIBRATION_ANCHOR_SCORE,
+        "calibration_enabled": CALIBRATION_ENABLED,
         "water_involved": water_drones_were_involved(),
+        # Kept for the data export and the "what you did" report section, but no
+        # longer added to the score (outcome-only, Aug 20).
         "credits": credits,
         "penalties": penalties,
         "credit_total": credit_total,
@@ -179,6 +289,8 @@ def compute_collaboration_score():
         "operator_delta": operator_delta,
         "manual_detection_count": manual_detection_count,
         "manual_suppression_fires": manual_suppression_fires,
+        "drones_lost": len(drone_damage_events),
+        "missed_fire_count": missed_fire_count,
         "ground_work_seconds": round_ground_suppression_work_seconds,
         "water_work_seconds": round_water_suppression_work_seconds,
         "manual_water_work_seconds": round_manual_water_suppression_work_seconds,
@@ -186,27 +298,34 @@ def compute_collaboration_score():
 
 
 def collaboration_run_succeeded():
-    """Did the operator at least match the automation baseline they were given?"""
+    """Did the operator match or beat the automation on this stage? Outcome-only
+    (Aug 20): the score IS the calibrated mission outcome, so beating automation
+    means the score reached the anchor (where full automation lands)."""
     grade = compute_collaboration_score()
-    return grade["score"] >= grade["base"] + COLLABORATION_SUCCESS_MARGIN_POINTS
+    return grade["score"] >= grade["calibration_anchor"] + COLLABORATION_SUCCESS_MARGIN_POINTS
 
 
 def compose_collaboration_score_lines():
     grade = compute_collaboration_score()
-    lines = [
-        "SCORE: %.0f/100" % grade["score"],
-        "  base %.0f  (%s)" % (grade["base"], grade["base_label"]),
-    ]
-    for label, points in grade["credits"].items():
-        if points >= 0.05:
-            lines.append("  +%.1f  %s" % (points, label))
-    for label, points in grade["penalties"].items():
-        if points >= 0.05:
-            lines.append("  -%.1f  %s" % (points, label))
-    if grade["credit_total"] < 0.05 and grade["penalty_total"] < 0.05:
-        lines.append("  operator changed nothing: hands-off baseline")
-    else:
-        lines.append("  operator total %+.1f" % grade["operator_delta"])
+    lines = ["SCORE: %.0f/100  (calibrated mission outcome)" % grade["score"]]
+    if grade.get("calibration_enabled"):
+        lines.append(
+            "  raw P1-P4 %.0f, this stage's automation baseline %.0f"
+            % (grade["raw_mission_score"], grade["stage_baseline_score"])
+        )
+        lines.append(
+            "  -> adjusted so full automation scores %.0f on every stage"
+            % grade["calibration_anchor"]
+        )
+    # Manual actions are recorded but do NOT change the score (outcome-only).
+    lines.append(
+        "  you did (not scored): %d fire(s) found by hand, %.1f fire(s) of manual spray, %d drone(s) lost"
+        % (
+            grade["manual_detection_count"],
+            grade["manual_suppression_fires"],
+            grade["drones_lost"],
+        )
+    )
     return lines
 
 
@@ -218,42 +337,44 @@ def compose_collaboration_formula_lines():
         lines.extend(("  " + row) if row else "" for row in rows)
         lines.append("")
 
-    block("17. COLLABORATION SCORE OUT OF 100", (
-        "The score says how the responders + fire did, then what the operator",
-        "added on top of that:",
+    block("17. THE SCORE OUT OF 100 (outcome-only)", (
+        "The score is ONE number: the round's mission outcome, adjusted for the",
+        "stage's difficulty. Nothing else is added.",
         "",
-        "  base  = P1-P4 mission performance x 100  (Aug 9, 2026: the fixed",
-        "          40/67 water tier was dropped; the base now overlaps the",
-        "          P1-P4 score, so a hands-off round scores exactly its P1-P4)",
-        "  score = clamp(base + operator credit - operator cost, 0, 100)",
+        "  raw   = P1-P4 mission performance x 100",
+        "  score = clamp( anchor + (raw - full_auto_baseline[stage]) , 0 , 100 )",
         "",
-        "Because the base is P1-P4, it already reflects the round's difficulty",
-        "factors: fire spread rate, number and speed of the drones, ground-crew",
-        "and water-drone suppression rates all leave their mark on P1-P4. Making",
-        "those factors an explicit, comparable calibration is the next step.",
+        "CALIBRATION (Aug 18, 2026): each stage is a different difficulty, so a",
+        "hands-off full-auto round scores a different raw P1-P4 on each. The score",
+        "shifts that raw score so every stage's hands-off baseline lands on ONE",
+        "common anchor = %.0f. A hands-off round therefore scores the anchor on"
+        % CALIBRATION_ANCHOR_SCORE,
+        "every stage, and a participant's distance above/below the anchor is what",
+        "they added over the automation, on a scale that is comparable across",
+        "stages (O'Neill et al. 2022: value = team result - automation alone).",
         "",
-        "OPERATOR CREDIT",
-        "  + %.1f per fire first found while that survey drone was in MANUAL"
-        % COLLABORATION_MANUAL_DETECTION_POINTS,
-        "  + %.1f per fire's worth of suppression sprayed manually with [J],"
-        % COLLABORATION_MANUAL_SUPPRESSION_POINTS_PER_FIRE,
-        "    measured as manual_water_work / %.1f work-seconds per fire"
-        % _collab_full_suppression_work_seconds(),
+        "  full-auto baselines used (mean P1-P4 x 100, measured on the fixed map):",
+        "    stage 1 = %.0f   stage 2 = %.0f   stage 3 = %.0f   stage 4 = %.0f"
+        % (
+            STAGE_FULL_AUTO_BASELINE_SCORES[1],
+            STAGE_FULL_AUTO_BASELINE_SCORES[2],
+            STAGE_FULL_AUTO_BASELINE_SCORES[3],
+            STAGE_FULL_AUTO_BASELINE_SCORES[4],
+        ),
+        "  Re-measure these (scripts/headless_run.py calibrate) if the fire,",
+        "  resources or team are retuned.",
         "",
-        "OPERATOR COST",
-        "  - %.1f per drone lost (collision, branch, ground, kill switch)"
-        % COLLABORATION_DRONE_LOSS_PENALTY_POINTS,
-        "  - %.1f per fire that burned or was never found, scaled by how much"
-        % COLLABORATION_MISSED_FIRE_PENALTY_POINTS,
-        "    of that fire's life the operator held the responsible survey drone",
-        "    in MANUAL (so an automation miss is not charged to the person)",
-        "",
-        "A hands-off full-automation round has no credit and no cost, so it",
-        "scores exactly the base, the same number every time. That is the",
-        "baseline each participant is measured against, and it is why the",
-        "team-size effectiveness multiplier and the extra-drone bonus were",
-        "removed from the mission score: fairness across team sizes is handled",
-        "by making the fire harder for bigger teams, not by scaling points.",
+        "WHY NO SEPARATE OPERATOR POINTS (Aug 20, 2026): the manual actions the",
+        "operator takes (finding a fire by hand, spraying with [J], and drone",
+        "losses) ALREADY show up in the mission outcome, because they change how",
+        "many fires are found and put out (P1-P4). Adding a separate per-action",
+        "bonus double-counted that work and was unbounded (holding the spray key",
+        "could farm points and cap the score at 100). So those actions are now",
+        "RECORDED for the record and the CSV, but they do not change the score.",
+        "The operator raises the score only by producing a better outcome than",
+        "the automation would have. The team-size multiplier and extra-drone",
+        "bonus were removed for the same comparability reason; fairness across",
+        "team sizes is handled by making the fire harder for bigger teams.",
     ))
 
     while lines and lines[-1] == "":

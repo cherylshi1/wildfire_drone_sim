@@ -2117,8 +2117,26 @@ def compute_manual_desired_velocity(camera_heading_degrees, key_state, speed):
     )
 
 
+_drone_views_cache = None
+
+
+def invalidate_drone_views_cache():
+    """Drop the cached view list. The roster only changes at round setup
+    (follower spawn / teardown), so callers invalidate there; the frame loop
+    also invalidates once per frame as a safety net. See get_all_drone_views."""
+    global _drone_views_cache
+    _drone_views_cache = None
+
+
 def get_all_drone_views():
-    """Ordered camera/control targets: all survey drones, then all water drones."""
+    """Ordered camera/control targets: all survey drones, then all water drones.
+
+    The dispatch and camera code calls this dozens of times per frame, and the
+    roster is constant during a round, so the built list is cached and only
+    rebuilt after invalidate_drone_views_cache() (roster change / frame start)."""
+    global _drone_views_cache
+    if _drone_views_cache is not None:
+        return _drone_views_cache
     views = [
         {
             "root": drone,
@@ -2180,6 +2198,7 @@ def get_all_drone_views():
                 "follower": follower,
             }
         )
+    _drone_views_cache = views
     return views
 
 
@@ -2505,30 +2524,49 @@ def toggle_dev_bird_view():
         set_overhead_view(True, False)
 
 
+def survey_drone_within_detection_range(hotspot):
+    """True if any active survey (thermal) drone is close enough to physically
+    see this still-undetected fire. Mirrors the detection radius so an
+    undetected fire is only REVEALED once a survey drone is over it, instead of
+    every fire on the map showing up in the survey view (Aug 11, 2026)."""
+    root = getattr(hotspot, "root", None)
+    if root is None or root.isEmpty():
+        return False
+    reveal_radius = FIRE_HOTSPOT_DETECTION_RADIUS_METERS
+    for survey_root in get_active_survey_drone_roots():
+        if survey_root is None or survey_root.isEmpty():
+            continue
+        dx = root.getX() - survey_root.getX()
+        dy = root.getY() - survey_root.getY()
+        if (dx * dx + dy * dy) ** 0.5 <= reveal_radius:
+            return True
+    return False
+
+
 def refresh_operator_fire_visibility():
     """Apply role-appropriate fire visibility.
 
-    The operator satellite map and firefighting drones cannot reveal an
-    undetected fire. Survey drones retain the thermal-search role.
+    Detected fires are always shown. An UNDETECTED fire is only revealed when a
+    survey (thermal) drone is within its detection radius - so no view shows the
+    whole map's fires at once. The operator satellite map only ever shows
+    detected fires; the dev bird view shows everything for debugging.
     """
-    selected_view = get_selected_drone_view()
-    water_camera_without_thermal = (
-        not overview_camera_enabled
-        and selected_view is not None
-        and selected_view["role"] == "water"
-    )
-    hide_undetected = (
-        (overview_camera_enabled and overview_is_operator)
-        or water_camera_without_thermal
-    )
+    dev_bird_view = overview_camera_enabled and not overview_is_operator
+    operator_satellite = overview_camera_enabled and overview_is_operator
     for hotspot in fire_hotspots:
         root = getattr(hotspot, "root", None)
         if root is None or root.isEmpty():
             continue
-        if hide_undetected and not hotspot.detected:
-            root.hide()
-        else:
+        if hotspot.detected:
             root.show()
+        elif dev_bird_view:
+            root.show()
+        elif operator_satellite:
+            root.hide()
+        elif survey_drone_within_detection_range(hotspot):
+            root.show()
+        else:
+            root.hide()
 
 
 def adjust_overview_camera_zoom(distance_delta):

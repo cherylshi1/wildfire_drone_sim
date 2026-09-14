@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use, quote, discuss, compare against, or rely on this research software, please cite it."
+type: software
+title: "Human Trust in Autonomous Wildfire Response Simulation"
+authors:
+  - name: "Cheryl"
+date-released: 2026-09-14
+repository-code: "https://github.com/REPLACE_WITH_USERNAME/REPLACE_WITH_REPOSITORY"
+license: "LicenseRef-All-Rights-Reserved"
+keywords:
+  - human-automation trust
+  - wildfire simulation
+  - drones
+  - Panda3D
+  - research software
+abstract: "A Panda3D wildfire response simulation for studying human trust, automation, and collaboration in multi-drone forest fire scenarios."

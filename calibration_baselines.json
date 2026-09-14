@@ -1,0 +1,12 @@
+{
+  "baselines": {
+    "0": 55.67,
+    "1": 50.27,
+    "2": 45.67,
+    "3": 59.12,
+    "4": 59.15
+  },
+  "anchor": 53.55,
+  "measured_at": "2026-08-19",
+  "note": "Full-auto raw P1-P4 x100 per stage, measured on this machine. Anchor = mean of stages 1-4. Regenerate after retuning."
+}

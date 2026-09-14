@@ -1043,11 +1043,19 @@ def update_operator_performance_overlay(performance):
         # Freeze all live graphs at game over; the results page displays them.
         return
 
-    performance_score_text.setText(
-        f"Composite Score: {score * 100.0:.0f}%"
-        f" | Survey {performance['team_survey_drones']}"
-        f" / Water {performance['team_water_drones']}"
-    )
+    if PARTICIPANT_SCORE_HIDDEN:
+        # Hide the running score from the participant; keep the team readout so
+        # the panel still says who is flying. The score is still recorded.
+        performance_score_text.setText(
+            f"Survey {performance['team_survey_drones']}"
+            f" / Water {performance['team_water_drones']}"
+        )
+    else:
+        performance_score_text.setText(
+            f"Composite Score: {score * 100.0:.0f}%"
+            f" | Survey {performance['team_survey_drones']}"
+            f" / Water {performance['team_water_drones']}"
+        )
     update_live_metrics_panel()
 
 
@@ -1795,25 +1803,9 @@ def export_round_report_pdf():
         9, (0.4, 0.4, 0.45),
     )
 
-    # The 100-point score: collaboration base, then what the operator changed.
-    text(55, 692, "FINAL SCORE: %.0f/100" % grade["score"], 14, head_c)
-    text(
-        55,
-        674,
-        "Base %.0f: %s   |   operator %+.1f"
-        % (grade["base"], grade["base_label"], grade["operator_delta"]),
-        10,
-        head_c,
-    )
-    text(
-        55,
-        660,
-        "base = P1-P4 mission performance out of 100. "
-        "Hands-off automation scores exactly the base.",
-        7.5,
-        (0.42, 0.44, 0.5),
-    )
-    deduction_y = 644
+    # ONE score (Cheryl, Aug 19, 2026): the score IS the P1-P4 mission outcome,
+    # adjusted for the stage's difficulty (calibration), plus manual actions.
+    # P1-P4 are shown below as the PARTS of this one number, never a 2nd score.
     score_rows = [
         (
             "+ " + label,
@@ -1838,36 +1830,29 @@ def export_round_report_pdf():
         )
         for label, points in grade["penalties"].items()
     ]
-    for label, points, bar_color, explanation in score_rows:
-        rect(370, deduction_y - 2, 105, 8, (0.9, 0.91, 0.93))
-        rect(370, deduction_y - 2, 105 * min(1.0, points / 33.0), 8, bar_color)
-        text(60, deduction_y, label, 8)
-        text(215, deduction_y, explanation, 7, (0.45, 0.47, 0.52))
-        text(485, deduction_y, "%.1f" % points, 8)
-        deduction_y -= 12
-    text(60, deduction_y, "operator total", 8, head_c)
-    text(485, deduction_y, "%+.1f" % grade["operator_delta"], 8, head_c)
-    deduction_y -= 4
+    action_rows = [row for row in score_rows if abs(row[1]) >= 0.05]
+    run_succeeded = grade["base"] >= grade["calibration_anchor"] - 0.05
 
-    run_succeeded = grade["score"] >= grade["base"] + COLLABORATION_SUCCESS_MARGIN_POINTS
-    composite_y = deduction_y - 26
-    text(55, composite_y, "MISSION OUTCOME (P1-P4): %.0f%%" % (performance["performance_score"] * 100.0), 12, head_c)
+    text(55, 694, "FINAL SCORE: %.0f / 100" % grade["score"], 15, head_c)
     text(
-        330,
-        composite_y,
-        "MATCHED OR BEAT THE BASELINE" if run_succeeded else "BELOW THE AUTOMATION BASELINE",
-        9,
-        auto_c if run_succeeded else red_c,
+        368, 695,
+        "ABOVE AUTOMATION" if run_succeeded else "BELOW AUTOMATION",
+        10, auto_c if run_succeeded else red_c,
     )
-    composite_y -= 11
     text(
-        55,
-        composite_y,
-        "How well the round went for the forest. It does not set the score above.",
-        7.5,
-        (0.42, 0.44, 0.5),
+        55, 678,
+        "how well the fires were handled (P1-P4 below), adjusted so full automation",
+        8, (0.42, 0.44, 0.5),
     )
-    composite_y -= 14
+    text(
+        55, 668,
+        "always scores %.0f on every stage. One number. Above %.0f = you beat automation."
+        % (grade["calibration_anchor"], grade["calibration_anchor"]),
+        8, (0.42, 0.44, 0.5),
+    )
+
+    text(55, 650, "THE PARTS: P1-P4 MISSION OUTCOME", 10, head_c)
+    composite_y = 634
     # Every metric carries its plain-language meaning (Cheryl, July 29: the
     # report has to explain itself, not just print bars).
     metric_rows = (
@@ -1901,7 +1886,42 @@ def export_round_report_pdf():
         text(70, composite_y, explanation, 6.5, (0.45, 0.47, 0.52))
         composite_y -= 11
 
-    summary_y = composite_y - 20
+    # Putting the parts into the SINGLE score: the raw P1-P4 average, then the
+    # stage-difficulty adjustment (calibration), giving one number. The manual
+    # actions are NOT added (outcome-only, Aug 20); they are listed below as
+    # context only, since they already show up in P1-P4.
+    composite_y -= 8
+    text(55, composite_y, "PUTTING IT TOGETHER  ->  ONE SCORE", 10, head_c)
+    composite_y -= 15
+    text(60, composite_y, "raw P1-P4 average this round", 8)
+    text(485, composite_y, "%.0f%%" % (performance["performance_score"] * 100.0), 8)
+    composite_y -= 12
+    text(
+        60, composite_y,
+        "adjusted for this stage's difficulty (automation here scores %.0f%%)"
+        % grade["stage_baseline_score"],
+        8,
+    )
+    composite_y -= 11
+    rect(55, composite_y + 4, 430, 0.6, (0.6, 0.62, 0.66))
+    text(60, composite_y - 2, "FINAL SCORE", 9, head_c)
+    text(485, composite_y - 2, "%.0f" % grade["score"], 9, head_c)
+    composite_y -= 14
+
+    # What the operator actually did, recorded but NOT scored (outcome-only).
+    text(55, composite_y, "WHAT YOU DID (recorded, not part of the score)", 9, head_c)
+    composite_y -= 12
+    did_rows = (
+        "fires found while flying by hand: %d" % grade["manual_detection_count"],
+        "manual [J] spray done: about %.1f fire(s) worth" % grade["manual_suppression_fires"],
+        "drones lost: %d | fires never found or burned: %d"
+        % (grade["drones_lost"], grade["missed_fire_count"]),
+    )
+    for row in did_rows:
+        text(60, composite_y, row, 7.5, (0.45, 0.47, 0.52))
+        composite_y -= 10
+
+    summary_y = composite_y - 16
     text(55, summary_y, "ROUND TOTALS", 10, head_c)
     summary_rows = (
         "Team: %d drones (%d survey / %d water)"
@@ -1943,7 +1963,7 @@ def export_round_report_pdf():
     text(55, trust_y, "TRUST MATRIX M1-M4 (per drone, behaviour of the operator)", 10, head_c)
     trust_y -= 11
     for meaning in (
-        "M1 sigma' = flown path length / planned path length. 1.0 = flew the ideal route, higher = detours.",
+        "M1 sigma' = planned (automation) path / flown (actual) path. 1.0 = flew like the automation, below 1.0 = detoured.",
         "M2 obstacle clearance while flying by hand, mean and worst, in metres. Risk tolerance.",
         "M3 share of the round that drone spent in manual. Falling over runs = growing trust in automation.",
         "M4 Hausdorff distance to the planned route, in metres. Small = same route tidied, large = own plan.",
@@ -1955,7 +1975,7 @@ def export_round_report_pdf():
     text(
         60,
         trust_y,
-        "'-' means not enough data: M2 needs manual flight, sigma' needs planned progress.",
+        "'-' means not enough data: M2 needs manual flight, sigma' needs on-task flight.",
         7,
         (0.45, 0.47, 0.52),
     )
@@ -2253,8 +2273,8 @@ def export_round_report_pdf():
         "next to this file.",
     )
     cursor_y = 718
-    cursor_y = section_lines("SCORE BREAKDOWN", [
-        "Collaboration base: %.0f points (%s)" % (grade["base"], grade["base_label"]),
+    cursor_y = section_lines("SCORE BREAKDOWN (one score, built up)", [
+        "Mission outcome, the basis: %.0f points (%s)" % (grade["base"], grade["base_label"]),
         "Ground crew work: %.1f work-seconds | water drone work: %.1f "
         "(%.1f of it sprayed manually)"
         % (
@@ -2677,19 +2697,29 @@ def show_results_page():
         scale=0.052,
         color=(0.98, 0.86, 0.42, 1.0),
     )
-    _results_text(
-        f"FINAL SCORE: {grade['score']:.0f}/100"
-        f"   (base {grade['base']:.0f} {grade['operator_delta']:+.1f} operator)",
-        (-1.18, 0.64),
-        scale=0.040,
-        color=(0.58, 1.0, 0.68, 1.0),
-    )
-    _results_text(
-        f"Collaboration: {grade['base_label']}",
-        (-1.18, 0.585),
-        scale=0.026,
-        color=(0.72, 0.9, 1.0, 1.0),
-    )
+    if PARTICIPANT_SCORE_HIDDEN:
+        # The score is a research measure; the participant does not see it on
+        # screen. It is still computed and written to the exported PDF and CSV.
+        _results_text(
+            "Round complete - your results have been recorded.",
+            (-1.18, 0.64),
+            scale=0.036,
+            color=(0.72, 0.9, 1.0, 1.0),
+        )
+    else:
+        _results_text(
+            f"FINAL SCORE: {grade['score']:.0f}/100"
+            f"   (base {grade['base']:.0f} {grade['operator_delta']:+.1f} operator)",
+            (-1.18, 0.64),
+            scale=0.040,
+            color=(0.58, 1.0, 0.68, 1.0),
+        )
+        _results_text(
+            f"Collaboration: {grade['base_label']}",
+            (-1.18, 0.585),
+            scale=0.026,
+            color=(0.72, 0.9, 1.0, 1.0),
+        )
     _results_text(
         f"Round length: {format_round_clock(motion_state.sim_time_seconds)}"
         f" | Burned: {burn_ratio() * 100.0:.0f}% of map",
@@ -2697,7 +2727,14 @@ def show_results_page():
         scale=0.030,
     )
 
-    left_lines = compose_final_grade_lines()[1:] + [""]
+    # The score/base/operator breakdown (first lines of compose_final_grade_lines)
+    # is part of the grade, so it is only shown on screen when the score is not
+    # hidden. The behavioural sections (mode usage, fire clusters, view switches)
+    # are always shown.
+    if PARTICIPANT_SCORE_HIDDEN:
+        left_lines = []
+    else:
+        left_lines = compose_final_grade_lines()[1:] + [""]
     left_lines.extend(compose_mode_usage_lines())
     left_lines.append("")
     left_lines.extend(compose_extinguish_credit_lines())

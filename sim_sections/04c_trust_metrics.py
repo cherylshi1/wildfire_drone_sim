@@ -755,10 +755,19 @@ def compute_trust_metrics():
         planned = record["planned_progress_m"]
         # sigma' numerator is the distance flown WHILE a route was active (planar),
         # matched to the planned arc length made good along that same route.
+        # M1 sigma' (Cheryl, Aug 18 2026): planned / flown, where
+        #   planned = the automation-equivalent body distance (what the drone
+        #             travels under automation, or the automation route it made
+        #             good while the operator flew), and
+        #   flown   = the actual body distance travelled on task.
+        # A pure-automation drone has planned == flown, so sigma' = 1.00. A
+        # manual detour flies further than the automation would, so flown > planned
+        # and sigma' drops below 1.00 (1.0 = flew like the automation, lower = less
+        # efficient than the automation).
         route_flown = record["route_flown_m"]
         sigma = (
-            (route_flown / planned)
-            if planned >= TRUST_MIN_PLANNED_PROGRESS_METERS
+            (planned / route_flown)
+            if route_flown >= TRUST_MIN_PLANNED_PROGRESS_METERS
             else None
         )
         clearance_mean = (
@@ -790,6 +799,9 @@ def compute_trust_metrics():
             "flown_m": flown,
             "flown_manual_m": record["flown_manual_m"],
             "flown_auto_m": record["flown_auto_m"],
+            # route_flown_m is the actual on-task body distance (the M1 "flown");
+            # planned_m is the automation-equivalent distance (the M1 "planned").
+            "route_flown_m": route_flown,
             "planned_m": planned,
             "m1_sigma": sigma,
             "m2_clearance_mean_m": clearance_mean,
@@ -1085,8 +1097,8 @@ def build_trust_round_table(rows=None):
         rows = compute_trust_metrics()
     columns = [
         "Drone",
-        "Flown m",
         "Planned m",
+        "Flown m",
         "M1 sigma'",
         "M2 mean m",
         "M2 min m",
@@ -1104,8 +1116,8 @@ def build_trust_round_table(rows=None):
 
         table_rows.append([
             label,
-            cell(row["flown_m"]),
             cell(row["planned_m"]),
+            cell(row.get("route_flown_m")),
             cell(row["m1_sigma"], "%.2f"),
             cell(row["m2_clearance_mean_m"], "%.1f"),
             cell(row["m2_clearance_min_m"], "%.1f"),

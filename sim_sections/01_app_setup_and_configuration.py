@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from math import atan2, ceil, copysign, cos, degrees, exp, log1p, radians, sin, tau
+from math import atan2, ceil, copysign, cos, degrees, exp, log1p, radians, sin, tan, tau
 from pathlib import Path
 import random
 from collections import deque
@@ -106,6 +106,13 @@ REAL_SIM_CLIENT_SLEEP_SECONDS = (
     read_nonnegative_float_env("REAL_SIM_CLIENT_SLEEP_MS", 2.0) / 1000.0
 )
 REAL_SIM_MANUAL_FRAME_PACING = read_bool_env("REAL_SIM_MANUAL_FRAME_PACING", True)
+# Aug 18, 2026 (Cheryl): the 0-100 score is a research measure, not something the
+# participant should watch or see between rounds (it would shape their trust and
+# behaviour). Hide it from the two participant-facing screens: the live mission
+# panel and the on-screen end-of-round page. It is still computed, still printed
+# in the exported PDF and CSV, and still in the compiled all-stages summary, so
+# nothing is lost for analysis. Set REAL_SIM_HIDE_SCORE=0 to show it on screen.
+PARTICIPANT_SCORE_HIDDEN = read_bool_env("REAL_SIM_HIDE_SCORE", True)
 REAL_SIM_GROUND_CACHE_CELL_METERS = read_nonnegative_float_env(
     "REAL_SIM_GROUND_CACHE_CELL_METERS",
     0.5,
@@ -450,6 +457,9 @@ WATER_DRONE_AUTO_VISUAL_TILT_SCALE = 0.12
 WATER_DRONE_AUTO_VISUAL_TILT_TIME_CONSTANT_SECONDS = 0.18
 WATER_DRONE_MODEL_TINT = (0.36, 0.72, 1.0, 1.0)
 WATER_DRONE_TANK_CAPACITY_LITERS = 40.0
+# Sim default, kept so per-stage calibration overrides can fall back to it. The
+# live value above is reassigned per stage by apply_stage_resource_limits().
+DEFAULT_WATER_DRONE_TANK_CAPACITY_LITERS = WATER_DRONE_TANK_CAPACITY_LITERS
 WATER_DRONE_SPRAY_FLOW_LITERS_PER_SECOND = 0.35
 WATER_DRONE_EMPTY_EPSILON_LITERS = 0.05
 WATER_REFILL_HOLD_SECONDS = 8.0
@@ -629,6 +639,21 @@ round_duration_seconds = (
     if configured_round_minutes >= 6.0
     else ROUND_DURATION_SHORT_SECONDS
 )
+# The base study round length (the scored stages use this). Individual stages
+# can run a different length, set at stage launch in apply_stage_resource_limits.
+BASE_ROUND_DURATION_SECONDS = round_duration_seconds
+# Per-stage round-length overrides in MINUTES (Cheryl, Aug 20, 2026): the warm-up
+# / demo practice (stage 0) runs 5 minutes so participants can get used to the
+# controls; the scored stages use the base study length (3 minutes). A stage with
+# no entry here uses the base length.
+STAGE_ROUND_MINUTES_OVERRIDE = {0: 5.0}
+
+
+def get_stage_round_duration_seconds(stage_number):
+    minutes = STAGE_ROUND_MINUTES_OVERRIDE.get(int(stage_number))
+    if minutes is None:
+        return BASE_ROUND_DURATION_SECONDS
+    return minutes * 60.0
 
 # Short profile: one random fire source at 0:15, plus the established second
 # source at 1:15 for a balanced 6-drone team.
@@ -636,6 +661,39 @@ FIRE_HOTSPOT_INITIAL_COUNT = 1
 FIRE_IGNITION_DELAY_SECONDS = 15.0
 SECOND_FIRE_IGNITION_DELAY_SECONDS = 75.0
 SECOND_FIRE_MIN_TEAM_SIZE = 6
+
+# CALIBRATION (Aug 9, 2026, Cheryl): the biggest source of run-to-run score
+# noise is that the fire ignites at a fully random spot each round, so the same
+# automation run scores very differently depending on how close the fire lands
+# to a drone's sweep. For calibration and for a stable baseline, the fire can be
+# pinned to fixed spots (fractions of the play area) instead. Enabled with
+# REAL_SIM_FIXED_FIRE=1; the study can leave it off, but the redesigned P1-P4
+# factors are what keep varied-fire play stable.
+FIRE_FIXED_IGNITION_ENABLED = read_bool_env("REAL_SIM_FIXED_FIRE", False)
+# One (fx, fy) per ignition index, as a fraction of the spawn area. The first
+# fire sits just off centre; the second (6-drone runs) sits in the far quadrant.
+FIRE_FIXED_IGNITION_FRACTIONS = ((0.5, 0.42), (0.72, 0.70))
+
+# FIXED MAP PER STAGE (Aug 9, 2026, Cheryl: "each person has the same map; the
+# map for each stage should always be the same for each person, but between the
+# stages it should be different"). A dedicated per-stage-seeded RNG drives the
+# fire ignition point and the fire spread, so the fire scenario (the "map") is
+# identical for every participant on a given stage, no matter how they fly, and
+# each stage gets its own scenario. The global RNG is reseeded to the same value
+# too, so a hands-off full-automation round is fully reproducible: that is the
+# stable calibration baseline. Turn off with REAL_SIM_FIXED_MAP=0 to measure the
+# natural run-to-run variance instead.
+STAGE_FIXED_MAP_ENABLED = read_bool_env("REAL_SIM_FIXED_MAP", True)
+STAGE_SCENARIO_SEED_BASE = 20260809
+STAGE_SCENARIO_SEED_STRIDE = 101
+# Aug 12, 2026: terrain (trees, grass, burnable cells) is generated once at load
+# from the GLOBAL RNG. Seed it deterministically so the forest is identical on
+# every app launch - otherwise each participant got a different map (the fire
+# spreads around trees), which silently broke the fixed-map guarantee ACROSS
+# sessions even though it looked stable within one process. Same terrain for all
+# stages; the per-stage fire still varies via scenario_random.
+WORLD_TERRAIN_SEED = 20260809
+SCENARIO_SEED_INCLUDES_GLOBAL_RANDOM = True
 FIRE_SOURCE_COUNT_FOUR_DRONE_CASE = 1
 FIRE_SOURCE_COUNT_SIX_DRONE_CASE = 2
 # Long profile: three incident episodes distributed across the 10-minute run.
@@ -647,9 +705,30 @@ LONG_ROUND_FIRE_SOURCE_COUNT = len(LONG_ROUND_FIRE_IGNITION_SCHEDULE_SECONDS)
 FIRE_HOTSPOT_ACTIVE_LIMIT = 250
 FIRE_HOTSPOT_SPAWN_ATTEMPTS = 350
 FIRE_HOTSPOT_TREE_CLEARANCE_METERS = 6.0
-FIRE_HOTSPOT_DETECTION_RADIUS_METERS = 15.0
-FIRE_HOTSPOT_DETECTION_PROBABILITY_PER_SECOND = 1.8
-SMALL_TEAM_DETECTION_PROBABILITY_SCALE = 0.58
+# Detection / visibility radius derived from sensor geometry (Aug 9, 2026), not
+# a picked number. A downward-looking camera sees a circular ground footprint of
+# radius = flight altitude * tan(FOV / 2) (coverage geometry; see
+# FSC_Scoring_References.bib: quadcopter_fire_design). A ~45 m survey altitude
+# (within the documented 30-120 m UAV wildfire survey range: usfs_drone_rgbir,
+# flame3_2024) with a ~37 deg uncooled-LWIR thermal FOV (lightpath_thermal)
+# reproduces the 15 m radius the sim has always used.
+# Aug 12, 2026 calibration (Cheryl "tune as much as possible"): flight altitude
+# raised 45 -> 75 m (still inside the documented 30-120 m UAV wildfire survey
+# range: usfs_drone_rgbir, flame3_2024) so the same FOV geometry gives a ~25 m
+# thermal footprint instead of 15 m. Wider coverage is what lets a small (1
+# survey drone) team detect nearly every fire in a 3-minute round.
+FIRE_DETECTION_FLIGHT_ALTITUDE_METERS = 75.0
+FIRE_DETECTION_CAMERA_FOV_DEGREES = 36.87
+FIRE_HOTSPOT_DETECTION_RADIUS_METERS = round(
+    FIRE_DETECTION_FLIGHT_ALTITUDE_METERS
+    * tan(radians(FIRE_DETECTION_CAMERA_FOV_DEGREES / 2.0)),
+    1,
+)
+# Aug 12: detection probability 1.8 -> 4.0/s and the small-team penalty removed
+# (0.58 -> 1.0) so a fire inside the footprint is found quickly rather than
+# lingering undetected and spreading.
+FIRE_HOTSPOT_DETECTION_PROBABILITY_PER_SECOND = 4.0
+SMALL_TEAM_DETECTION_PROBABILITY_SCALE = 1.0
 SMALL_TEAM_FORCED_DETECTION_RADIUS_SCALE = 0.55
 FIRE_HOTSPOT_MIN_SCAN_ALTITUDE_METERS = 4.5
 # Research-backed timeline references:
@@ -689,6 +768,12 @@ FIRE_TARGET_GAME_DURATION_SECONDS = ROUND_DURATION_SHORT_SECONDS
 # down in about 3 sim seconds. With four ground units on this 1-hectare training
 # map, a clean 6-drone full-auto run should plausibly reach about 50% fully-out
 # during a 3-minute exercise.
+# Suppression rates (Cheryl's literature-grounded values, kept). At 1 sim-s = 15
+# real min these give ~23 s (ground) / ~10 s (water) per initial-attack marker.
+# Suppression THROUGHPUT is deliberately the limiter: automation finds nearly
+# every fire but cannot put them all out in a 3-minute round, so full-auto lands
+# near its ~50% extinguish design target (below the 74-97% human initial-attack
+# success band) and a human operator has room to improve the coordination.
 GROUND_FIREFIGHTER_SUPPRESSION_RATE_PER_SECOND = 0.95
 WATER_DRONE_ASSIST_SUPPRESSION_RATE_PER_SECOND = 2.15
 GROUND_FIREFIGHTER_RESPONSE_DELAY_SECONDS = 8.0
@@ -701,8 +786,15 @@ LONG_ROUND_MAX_REIGNITIONS_PER_HOTSPOT = 2
 LONG_ROUND_GROUND_SUPPRESSION_RATE_SCALE = 0.72
 LONG_ROUND_WATER_SUPPRESSION_RATE_SCALE = 0.78
 FIRE_SPREAD_ENABLED = True
-FIRE_FULL_MAP_TARGET_SECONDS = 160.0
+# Aug 12, 2026 calibration: fire slowed 160 -> 550 s to reach the whole map
+# (justified as a calmer wind). Over a 180 s round the fire now grows to about a
+# third of the map instead of all of it, so the automated team can find and put
+# out nearly all of it. Per-stage overrides live in STAGE_FIRE_FULL_MAP_TARGET_
+# SECONDS (04); stage 1 (1 survey + 1 water drone) needs an even calmer fire.
+FIRE_FULL_MAP_TARGET_SECONDS = 550.0
 LONG_ROUND_FULL_MAP_TARGET_SECONDS = 540.0
+# Set per round from the per-stage table; None -> use FIRE_FULL_MAP_TARGET_SECONDS.
+active_full_map_target_seconds_override = None
 # Six-drone full-auto pacing target: dense enough that the team can miss some
 # perimeter growth, but calm enough that a clean 3S/3W run can find roughly 80%
 # of hotspots and put out roughly 50% with water support.
@@ -757,7 +849,11 @@ AUTOMATION_TARGET_REACH_RADIUS_METERS = 1.6
 AUTOMATION_HOTSPOT_COMMIT_RADIUS_METERS = 0.45
 AUTOMATION_HOTSPOT_MIN_APPROACH_SPEED_METERS_PER_SECOND = 3.6
 AUTOMATION_SCAN_ALTITUDE_METERS = FIRE_HOTSPOT_MIN_SCAN_ALTITUDE_METERS
-AUTOMATION_FORCED_DETECTION_RADIUS_METERS = 1.75
+# Aug 12, 2026: automation "flies right over it" detect radius raised 1.75 -> 15
+# (still scaled down for small teams by SMALL_TEAM_FORCED_DETECTION_RADIUS_SCALE).
+# Without this, small teams detect too slowly and unworked fires keep spreading -
+# a feedback loop that capped stage 1/2 full-auto success.
+AUTOMATION_FORCED_DETECTION_RADIUS_METERS = 15.0
 AUTOMATION_HOTSPOT_FLYBY_RADIUS_METERS = 2.4
 AUTOMATION_HOTSPOT_REVISIT_DELAY_SECONDS = 6.0
 AUTOMATION_MIN_ALTITUDE_ABOVE_GROUND_METERS = 8.0
@@ -906,6 +1002,8 @@ def current_undetected_burnout_delay_seconds():
 def current_full_map_target_seconds():
     if round_is_long_profile():
         return LONG_ROUND_FULL_MAP_TARGET_SECONDS
+    if active_full_map_target_seconds_override is not None:
+        return active_full_map_target_seconds_override
     return FIRE_FULL_MAP_TARGET_SECONDS
 
 
@@ -1707,6 +1805,82 @@ def random_world_position(exclusion_radius=8):
             return x, y, ground_point.z, ground_normal
 
     return 0, 0, 0, Vec3(0, 0, 1)
+
+
+# Dedicated RNG for the fire scenario (ignition point + spread). Kept separate
+# from the global RNG so that human drone control, detection rolls and UI cannot
+# desync it: the fire a participant faces on a stage is identical for everyone.
+scenario_random = random.Random()
+
+
+# Optional per-stage fire-scenario seed overrides. A stage's default seed
+# decides where its fire ignites; some seeds happen to give the automation a
+# much harder (or easier) map. scripts/headless_run.py seedscan <stage> searches
+# seeds and writes the chosen one to scenario_seeds.json, loaded here, so a
+# stage whose automation baseline is an outlier can be pulled in line with the
+# others without changing anything else.
+STAGE_SCENARIO_SEED_OVERRIDE = {}
+_scenario_seed_file = PROJECT_ROOT / "scenario_seeds.json"
+try:
+    if _scenario_seed_file.exists():
+        _loaded_seeds = json.loads(_scenario_seed_file.read_text(encoding="utf-8"))
+        for _stage_key, _seed in (_loaded_seeds.get("seeds") or {}).items():
+            STAGE_SCENARIO_SEED_OVERRIDE[int(_stage_key)] = int(_seed)
+except Exception as _seed_error:
+    print("[real-sim] could not read scenario_seeds.json: %s" % _seed_error)
+
+
+def get_stage_scenario_seed(stage_number):
+    """A distinct, stable seed per stage, so stages differ but each stage is the
+    same for everyone. An entry in STAGE_SCENARIO_SEED_OVERRIDE (from
+    scenario_seeds.json) wins, so a chosen map can be pinned for a stage."""
+    stage_number = int(stage_number)
+    if stage_number in STAGE_SCENARIO_SEED_OVERRIDE:
+        return STAGE_SCENARIO_SEED_OVERRIDE[stage_number]
+    return STAGE_SCENARIO_SEED_BASE + stage_number * STAGE_SCENARIO_SEED_STRIDE
+
+
+def reseed_scenario_for_stage(stage_number):
+    """Pin the fire scenario for this stage. Reseeds the scenario RNG (the map)
+    and, for full-auto reproducibility, the global RNG too. No-op when
+    REAL_SIM_FIXED_MAP is off, so the fire stays naturally random."""
+    if not STAGE_FIXED_MAP_ENABLED:
+        return None
+    seed = get_stage_scenario_seed(stage_number)
+    scenario_random.seed(seed)
+    if SCENARIO_SEED_INCLUDES_GLOBAL_RANDOM:
+        random.seed(seed)
+    return seed
+
+
+def scenario_random_world_position(exclusion_radius=8):
+    """Like random_world_position, but drawn from the per-stage scenario RNG so
+    the fire's ignition point is the same for every participant on a stage."""
+    for _ in range(500):
+        x = scenario_random.uniform(SPAWN_X_MIN, SPAWN_X_MAX)
+        y = scenario_random.uniform(SPAWN_Y_MIN, SPAWN_Y_MAX)
+        if (x * x + (y - 5) * (y - 5)) < exclusion_radius * exclusion_radius:
+            continue
+        ground_sample = sample_ground(x, y)
+        if ground_sample is not None:
+            return x, y, ground_sample[0].z, ground_sample[1]
+    return 0, 0, 0, Vec3(0, 0, 1)
+
+
+def get_fixed_ignition_position(ignition_index):
+    """The deterministic fire location for a given ignition (0-based), when
+    REAL_SIM_FIXED_FIRE is on. Returns (x, y, z, normal) like
+    random_world_position, or None if fixed ignition is disabled."""
+    if not FIRE_FIXED_IGNITION_ENABLED or not FIRE_FIXED_IGNITION_FRACTIONS:
+        return None
+    clamped_index = max(0, min(len(FIRE_FIXED_IGNITION_FRACTIONS) - 1, int(ignition_index)))
+    fraction_x, fraction_y = FIRE_FIXED_IGNITION_FRACTIONS[clamped_index]
+    x = SPAWN_X_MIN + (SPAWN_X_MAX - SPAWN_X_MIN) * fraction_x
+    y = SPAWN_Y_MIN + (SPAWN_Y_MAX - SPAWN_Y_MIN) * fraction_y
+    ground_sample = sample_ground(x, y)
+    if ground_sample is None:
+        return x, y, 0.0, Vec3(0, 0, 1)
+    return x, y, ground_sample[0].z, ground_sample[1]
 
 
 def _team_counts_for_spawn():

@@ -1338,6 +1338,7 @@ def remove_follower_drones():
         if rig_root is not None and not rig_root.isEmpty():
             rig_root.removeNode()
     follower_drones = []
+    invalidate_drone_views_cache()
 
 
 def deploy_survey_lead_to_sector_start():
@@ -1529,6 +1530,7 @@ def spawn_follower_drone(role, lead_node, slot):
     }
     assign_follower_waypoint(follower)
     follower_drones.append(follower)
+    invalidate_drone_views_cache()
     return follower
 
 
@@ -1865,6 +1867,33 @@ def choose_water_support_hotspot_for_follower(follower):
     )
 
 
+def find_hotspot_by_id(hotspot_id):
+    if hotspot_id is None:
+        return None
+    for hotspot in fire_hotspots:
+        if id(hotspot) == hotspot_id:
+            return hotspot
+    return None
+
+
+def committed_water_target(tracked_hotspot_id, water_slot):
+    """Keep a water drone on the fire it is already working until that fire is
+    OUT (or burned/gone), instead of re-picking the best target every frame.
+
+    Aug 9, 2026: re-picking each frame made the drone flip-flop between nearby
+    fires - the twitchy rotating motion Cheryl saw - and meant fires only ever
+    got contained, never carried all the way to out. Committing to one fire
+    fixes both the motion and the effectiveness."""
+    committed = find_hotspot_by_id(tracked_hotspot_id)
+    if committed is None or not water_hotspot_is_targetable(committed):
+        return None
+    if WATER_FOLLOWS_PAIRED_SURVEY and not water_slot_matches_hotspot_owner(
+        water_slot, committed
+    ):
+        return None
+    return committed
+
+
 def compute_water_support_hover_angle(target_hotspot, water_slot, current_x, current_y):
     wind_vx, wind_vy, _, wind_speed_mps = get_wind_velocity()
     if wind_speed_mps > 0.25 and (abs(wind_vx) > 0.01 or abs(wind_vy) > 0.01):
@@ -1894,6 +1923,39 @@ def water_suppression_heading_degrees(source_x, source_y, target_hotspot):
     )
 
 
+def get_water_lock_heading(state):
+    if isinstance(state, dict):
+        return state.get("locked_suppression_heading_degrees")
+    return getattr(state, "locked_suppression_heading_degrees", None)
+
+
+def set_water_lock_heading(state, value):
+    if isinstance(state, dict):
+        state["locked_suppression_heading_degrees"] = value
+    else:
+        setattr(state, "locked_suppression_heading_degrees", value)
+
+
+def resolve_water_suppression_heading(state, target_hotspot, source_x, source_y):
+    """Face the fire while approaching, then LOCK that heading once within
+    suppression range so tiny hover drift stops swinging the nose back and
+    forth - the spinning-over-the-fire motion Cheryl saw (Aug 11, 2026). The
+    lock clears automatically when the drone leaves range or switches fires."""
+    dx = source_x - target_hotspot.root.getX()
+    dy = source_y - target_hotspot.root.getY()
+    distance = (dx * dx + dy * dy) ** 0.5
+    if distance <= WATER_DRONE_SUPPRESSION_RADIUS_METERS:
+        locked = get_water_lock_heading(state)
+        if locked is None:
+            locked = water_suppression_heading_degrees(
+                source_x, source_y, target_hotspot
+            )
+            set_water_lock_heading(state, locked)
+        return locked
+    set_water_lock_heading(state, None)
+    return water_suppression_heading_degrees(source_x, source_y, target_hotspot)
+
+
 def update_water_follower_drone(follower, dt):
     rig = follower["root"]
     water_slot = follower.get("slot", 1) + 1
@@ -1909,12 +1971,16 @@ def update_water_follower_drone(follower, dt):
         follower["target_hotspot"] = None
         follower["tracked_hotspot_id"] = None
         return
-    if WATER_FOLLOWS_PAIRED_SURVEY:
-        target_hotspot = choose_paired_survey_water_hotspot(
-            water_slot, rig.getX(), rig.getY()
-        )
-    else:
-        target_hotspot = choose_water_support_hotspot_for_follower(follower)
+    target_hotspot = committed_water_target(
+        follower.get("tracked_hotspot_id"), water_slot
+    )
+    if target_hotspot is None:
+        if WATER_FOLLOWS_PAIRED_SURVEY:
+            target_hotspot = choose_paired_survey_water_hotspot(
+                water_slot, rig.getX(), rig.getY()
+            )
+        else:
+            target_hotspot = choose_water_support_hotspot_for_follower(follower)
     if not water_hotspot_is_targetable(target_hotspot):
         target_hotspot = None
     follower["target_hotspot"] = target_hotspot
@@ -1967,6 +2033,7 @@ def update_water_follower_drone(follower, dt):
     hotspot_id = id(target_hotspot)
     if follower.get("tracked_hotspot_id") != hotspot_id:
         follower["tracked_hotspot_id"] = hotspot_id
+        set_water_lock_heading(follower, None)
         follower["hover_offset_angle_radians"] = compute_water_support_hover_angle(
             target_hotspot,
             follower.get("slot", 1) + 1,
@@ -2012,10 +2079,11 @@ def update_water_follower_drone(follower, dt):
         WATER_DRONE_HOVER_HOLD_RADIUS_METERS * 2.1,
         min_speed_scale=0.0,
     )
-    target_heading_degrees = water_suppression_heading_degrees(
+    target_heading_degrees = resolve_water_suppression_heading(
+        follower,
+        target_hotspot,
         rig.getX(),
         rig.getY(),
-        target_hotspot,
     )
     update_guided_drone_motion(
         rig,
@@ -2241,15 +2309,17 @@ def update_water_drone(dt):
         team_state.water_target_hotspot = None
         water_drone_state.tracked_hotspot_id = None
         return
-    if WATER_FOLLOWS_PAIRED_SURVEY:
-        target_hotspot = choose_paired_survey_water_hotspot(
-            1, water_drone.getX(), water_drone.getY()
-        )
-    else:
-        target_hotspot = choose_water_support_hotspot(
-            water_drone.getX(),
-            water_drone.getY(),
-        )
+    target_hotspot = committed_water_target(water_drone_state.tracked_hotspot_id, 1)
+    if target_hotspot is None:
+        if WATER_FOLLOWS_PAIRED_SURVEY:
+            target_hotspot = choose_paired_survey_water_hotspot(
+                1, water_drone.getX(), water_drone.getY()
+            )
+        else:
+            target_hotspot = choose_water_support_hotspot(
+                water_drone.getX(),
+                water_drone.getY(),
+            )
     if not water_hotspot_is_targetable(target_hotspot):
         target_hotspot = None
     team_state.water_target_hotspot = target_hotspot
@@ -2313,6 +2383,7 @@ def update_water_drone(dt):
     hotspot_id = id(target_hotspot)
     if water_drone_state.tracked_hotspot_id != hotspot_id:
         water_drone_state.tracked_hotspot_id = hotspot_id
+        set_water_lock_heading(water_drone_state, None)
         water_drone_state.hover_offset_angle_radians = compute_water_support_hover_angle(
             target_hotspot,
             1,
@@ -2360,10 +2431,11 @@ def update_water_drone(dt):
         WATER_DRONE_HOVER_HOLD_RADIUS_METERS * 2.1,
         min_speed_scale=0.0,
     )
-    target_heading_degrees = water_suppression_heading_degrees(
+    target_heading_degrees = resolve_water_suppression_heading(
+        water_drone_state,
+        target_hotspot,
         water_drone.getX(),
         water_drone.getY(),
-        target_hotspot,
     )
     update_guided_drone_motion(
         water_drone,
@@ -3717,7 +3789,7 @@ def update_hotspot_spread(dt):
                     if candidate_cell in fire_burned_cells:
                         continue
                     candidate_cells.append(candidate_cell)
-            random.shuffle(candidate_cells)
+            scenario_random.shuffle(candidate_cells)
             for candidate_cell in candidate_cells[:FIRE_SPREAD_FALLBACK_RANDOM_ATTEMPTS]:
                 candidate_x, candidate_y = fire_cell_to_world(*candidate_cell)
                 if try_spawn_at(candidate_x, candidate_y, parent_fire_event_id):
@@ -3725,7 +3797,7 @@ def update_hotspot_spread(dt):
         return False
 
     spread_event_count = FIRE_SPREAD_EVENTS_PER_TICK
-    if random.random() < FIRE_SPREAD_EXTRA_EVENT_PROBABILITY:
+    if scenario_random.random() < FIRE_SPREAD_EXTRA_EVENT_PROBABILITY:
         spread_event_count += 1
     spread_event_count = min(spread_event_count, spread_cell_budget)
 
@@ -3744,13 +3816,13 @@ def update_hotspot_spread(dt):
                 # Worked spots are mostly held behind the line, but still flare
                 # up occasionally so the fire keeps growing (Cheryl June 14:
                 # "bring back the original spread" -> more fire to fight).
-                or random.random() < FIRE_WORKED_SPOT_SPREAD_PROBABILITY
+                or scenario_random.random() < FIRE_WORKED_SPOT_SPREAD_PROBABILITY
             )
         ]
         if not spread_sources:
             return
 
-        source_hotspot = random.choice(spread_sources)
+        source_hotspot = scenario_random.choice(spread_sources)
         if source_hotspot.root.isEmpty():
             continue
         source_x = source_hotspot.root.getX()
@@ -3758,8 +3830,8 @@ def update_hotspot_spread(dt):
 
         grew_this_event = False
         for _ in range(FIRE_SPREAD_SPAWN_ATTEMPTS):
-            spread_angle = random.uniform(0.0, tau)
-            spread_distance = random.uniform(
+            spread_angle = scenario_random.uniform(0.0, tau)
+            spread_distance = scenario_random.uniform(
                 FIRE_SPREAD_MIN_DISTANCE_METERS,
                 FIRE_SPREAD_MAX_DISTANCE_METERS,
             )

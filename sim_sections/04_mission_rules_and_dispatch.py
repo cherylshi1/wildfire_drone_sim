@@ -692,7 +692,12 @@ def choose_requested_hotspot(reference_x, reference_y):
 def get_water_source_candidates():
     auto_request_water_support_for_detected_hotspots()
     if any_water_slot_can_auto_dispatch():
-        return active_detected_hotspots()
+        # Aug 9, 2026 (drone-centric fix): include CONTAINED fires, not just
+        # ACTIVE ones, so a water drone stays with a fire until it is fully out
+        # instead of abandoning it at containment. Without this, water drones
+        # only ever contain fires and rely on the trucks to finish them, so a
+        # drone-first team (few/no trucks) never actually extinguishes anything.
+        return unresolved_detected_hotspots()
     return unresolved_requested_hotspots()
 
 
@@ -751,7 +756,14 @@ def get_fire_region_slot(hotspot):
 
 
 def water_slot_matches_hotspot_owner(water_slot, hotspot):
-    if not is_active_detected_hotspot(hotspot):
+    # Accept ACTIVE or CONTAINED (not just ACTIVE) so the paired water drone
+    # keeps working its fire until it is out (Aug 9, 2026 drone-centric fix).
+    if (
+        hotspot is None
+        or hotspot.root.isEmpty()
+        or not hotspot.detected
+        or hotspot.suppression_state not in (FIRE_STATE_ACTIVE, FIRE_STATE_CONTAINED)
+    ):
         return False
     paired_survey_slot = get_paired_survey_slot(water_slot)
     return survey_slot_owns_hotspot_event(paired_survey_slot, hotspot)
@@ -760,7 +772,7 @@ def water_slot_matches_hotspot_owner(water_slot, hotspot):
 def choose_paired_water_candidate(water_slot, reference_x, reference_y):
     candidates = [
         hotspot
-        for hotspot in active_detected_hotspots()
+        for hotspot in unresolved_detected_hotspots()
         if water_slot_matches_hotspot_owner(water_slot, hotspot)
     ]
     if not candidates:
@@ -1100,13 +1112,17 @@ def move_fire_truck_toward(truck_state, target_x, target_y, dt):
 
 
 def update_fire_truck_fleet(dt):
-    for truck_state in fire_truck_states:
+    active_truck_count = max(0, min(len(fire_truck_states), active_fire_truck_count))
+    for truck_index, truck_state in enumerate(fire_truck_states):
         previous_target = truck_state.target_hotspot
-        if not is_unresolved_truck_hotspot(truck_state.target_hotspot):
+        # Trucks beyond the stage's active count are off duty: drop any target
+        # and send them home (calibration knob, Aug 9 2026).
+        truck_is_active = truck_index < active_truck_count
+        if not truck_is_active or not is_unresolved_truck_hotspot(truck_state.target_hotspot):
             truck_state.target_hotspot = None
             truck_state.engaged = False
 
-        if truck_state.target_hotspot is None:
+        if truck_is_active and truck_state.target_hotspot is None:
             truck_state.target_hotspot = choose_fire_truck_target(truck_state)
             truck_state.engaged = False
 
@@ -1568,6 +1584,56 @@ def apply_selected_stage_for_launch():
         water_only_stage_active = False
 
 
+# CALIBRATION knobs per stage (Aug 9, 2026, Cheryl): the fire-truck (ground
+# crew) count and the water-drone tank capacity are tuned per stage so a
+# hands-off automation run reaches the SAME success rate in every scenario.
+# A stage with no entry falls back to the sim defaults (full truck fleet at
+# FIRE_TRUCK_COUNT, tank at DEFAULT_WATER_DRONE_TANK_CAPACITY_LITERS). Fill these
+# in once the per-stage automation success rate has been measured.
+STAGE_FIRE_TRUCK_COUNTS = {}           # stage number -> trucks that respond
+STAGE_WATER_TANK_CAPACITY_LITERS = {}  # stage number -> water tank capacity (L)
+# Aug 12, 2026 calibration: per-stage fire slowdown (full-map target seconds;
+# bigger = calmer wind = smaller fire) tuned so a hands-off full-auto round lands
+# on the SAME ~50% fires-out anchor in every stage. The anchor is taken from
+# UAV WILDFIRE-FIREFIGHTING SIMULATION studies (not human crews): the DSPFC
+# coordinated drone-swarm suppression sim reports Fire Mitigation Effectiveness
+# ~50% and ~73% of fires mitigated in a hard scenario (Bristol/Springer 2024,
+# "Extinguishing Wildfires in Large Scale Scenarios Using Swarms of UAVs"), and
+# ~82% mitigated / FME 61% in an easy scenario. Detection ~82% (20 UAVs, DSPF) /
+# ~86% (two-drone RL localisation sim) matches this sim's 73-91% detection. So
+# ~50% fires out is a mid, coordinated-swarm outcome, leaving clear headroom for
+# a human operator to improve on the automation. Bigger teams get a bigger fire
+# so every stage is equally hard. Measured full-auto on the fixed map: stage1
+# 50.9%, stage2 50.0%, stage3 49.3%, stage4 52.2%.
+STAGE_FIRE_FULL_MAP_TARGET_SECONDS = {1: 380.0, 2: 420.0, 3: 300.0, 4: 290.0}
+
+
+def apply_stage_resource_limits(stage_number):
+    """Set the per-stage calibration knobs (active truck count, water tank
+    capacity, fire slowdown) for the round about to start. Falls back to the sim
+    defaults when a stage has no override."""
+    global active_fire_truck_count, WATER_DRONE_TANK_CAPACITY_LITERS
+    global active_full_map_target_seconds_override, round_duration_seconds
+    # Per-stage round length: the warm-up (stage 0) runs longer than the scored
+    # stages. See STAGE_ROUND_MINUTES_OVERRIDE.
+    round_duration_seconds = get_stage_round_duration_seconds(stage_number)
+    active_fire_truck_count = max(
+        0,
+        min(
+            FIRE_TRUCK_COUNT,
+            int(STAGE_FIRE_TRUCK_COUNTS.get(stage_number, FIRE_TRUCK_COUNT)),
+        ),
+    )
+    WATER_DRONE_TANK_CAPACITY_LITERS = float(
+        STAGE_WATER_TANK_CAPACITY_LITERS.get(
+            stage_number, DEFAULT_WATER_DRONE_TANK_CAPACITY_LITERS
+        )
+    )
+    active_full_map_target_seconds_override = STAGE_FIRE_FULL_MAP_TARGET_SECONDS.get(
+        stage_number
+    )
+
+
 def apply_stage_start_control_modes():
     """Stage 1: survey drones start (and stay) in automation; the operator's
     view starts on the water drone they are supposed to fly."""
@@ -1810,6 +1876,11 @@ def start_game_from_pregame():
         # Scripted/legacy launches skip the ID screen: accept what was typed.
         finish_participant_entry()
     apply_selected_stage_for_launch()
+    # Pin the fire scenario to this stage so every participant faces the same map
+    # (and full-auto is reproducible). No-op when REAL_SIM_FIXED_MAP is off.
+    reseed_scenario_for_stage(selected_stage)
+    # Apply this stage's calibration knobs (truck count, water tank capacity).
+    apply_stage_resource_limits(selected_stage)
     restart_from_setup = round_restart_pending_from_setup
     pregame_active = False
     round_restart_pending_from_setup = False

@@ -1,0 +1,15 @@
+BASELINE stage=2 team=2 seed=11 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.549 grade=62.8 burn=0.397 fires=48 det=37 out=27 t=180
+BASELINE stage=2 team=2 seed=12 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.549 grade=62.8 burn=0.397 fires=48 det=37 out=27 t=180
+BASELINE stage=2 team=2 seed=13 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.549 grade=62.8 burn=0.397 fires=48 det=37 out=27 t=180
+BASELINE stage=2 team=2 seed=14 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.549 grade=62.8 burn=0.397 fires=48 det=37 out=27 t=180
+BASELINE stage=2 team=2 seed=15 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.549 grade=62.8 burn=0.397 fires=48 det=37 out=27 t=180
+BASELINE stage=3 team=4 seed=11 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.428 grade=37.3 burn=0.554 fires=67 det=63 out=29 t=180
+BASELINE stage=3 team=4 seed=12 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.428 grade=37.3 burn=0.554 fires=67 det=63 out=29 t=180
+BASELINE stage=3 team=4 seed=13 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.428 grade=37.3 burn=0.554 fires=67 det=63 out=29 t=180
+BASELINE stage=3 team=4 seed=14 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.428 grade=37.3 burn=0.554 fires=67 det=63 out=29 t=180
+BASELINE stage=3 team=4 seed=15 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.428 grade=37.3 burn=0.554 fires=67 det=63 out=29 t=180
+BASELINE stage=4 team=6 seed=11 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.682 grade=62.6 burn=0.570 fires=69 det=63 out=40 t=180
+BASELINE stage=4 team=6 seed=12 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.682 grade=62.6 burn=0.570 fires=69 det=63 out=40 t=180
+BASELINE stage=4 team=6 seed=13 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.682 grade=62.6 burn=0.570 fires=69 det=63 out=40 t=180
+BASELINE stage=4 team=6 seed=14 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.682 grade=62.6 burn=0.570 fires=69 det=63 out=40 t=180
+BASELINE stage=4 team=6 seed=15 mult={2: 1.0, 4: 1.0, 6: 1.3} raw=0.682 grade=62.6 burn=0.570 fires=69 det=63 out=40 t=180

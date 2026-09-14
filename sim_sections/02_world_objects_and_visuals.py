@@ -70,6 +70,13 @@ FIRE_TRUCK_COUNT = max(
         int(ceil(max(0.01, NOMINAL_PLAY_AREA_HECTARES) * FIRE_TRUCKS_PER_HECTARE)),
     ),
 )
+# Live count of trucks (ground crews) that may engage fires at once. This is a
+# CALIBRATION knob (Aug 9, 2026): the full fleet is always spawned at
+# FIRE_TRUCK_COUNT, but only the first active_fire_truck_count trucks respond;
+# the rest stay parked at staging. Set per stage via STAGE_FIRE_TRUCK_COUNTS and
+# apply_stage_resource_limits(). Used to equalise the automation success rate
+# across stages.
+active_fire_truck_count = FIRE_TRUCK_COUNT
 FIRE_TRUCK_SPEED_METERS_PER_SECOND = 7.0
 FIRE_TRUCK_FIRELINE_STANDOFF_METERS = 8.0
 FIRE_TRUCK_ARRIVAL_RADIUS_METERS = 2.4
@@ -1315,8 +1322,23 @@ def spawn_fire_hotspots(count):
     spawn_count = max(0, int(count))
     for _ in range(spawn_count):
         chosen_spawn = None
+        # Calibration mode: pin the fire to a deterministic spot so the
+        # automation baseline is stable and tunable. fire_ignitions_done has
+        # already been incremented for this ignition, so index = value - 1.
+        fixed_spawn = get_fixed_ignition_position(
+            globals().get("fire_ignitions_done", 1) - 1
+        )
+        if fixed_spawn is not None:
+            hotspots.append(
+                build_fire_hotspot_at(fixed_spawn[0], fixed_spawn[1], fixed_spawn[2])
+            )
+            continue
+        # The ignition point comes from the per-stage scenario RNG, so every
+        # participant on a stage gets the fire in the same place. (When
+        # REAL_SIM_FIXED_MAP is off, scenario_random is just an ordinary
+        # unseeded RNG, so the fire is random as before.)
         for _ in range(FIRE_HOTSPOT_SPAWN_ATTEMPTS):
-            candidate_spawn = random_world_position(exclusion_radius=18)
+            candidate_spawn = scenario_random_world_position(exclusion_radius=18)
             candidate_x = candidate_spawn[0]
             candidate_y = candidate_spawn[1]
             if _is_position_clear_of_trees(
@@ -1328,7 +1350,7 @@ def spawn_fire_hotspots(count):
                 break
 
         if chosen_spawn is None:
-            chosen_spawn = random_world_position(exclusion_radius=18)
+            chosen_spawn = scenario_random_world_position(exclusion_radius=18)
 
         x = chosen_spawn[0]
         y = chosen_spawn[1]
@@ -1723,6 +1745,10 @@ water_drone, water_drone_visual, water_drone_model, water_drone_propellers = bui
     WATER_DRONE_MODEL_TINT,
 )
 
+# Aug 12, 2026: pin the terrain RNG so the forest layout (and therefore where the
+# fire can spread) is the same on every launch. See WORLD_TERRAIN_SEED (01).
+if STAGE_FIXED_MAP_ENABLED:
+    random.seed(WORLD_TERRAIN_SEED)
 tree_prototypes = build_tree_prototypes()
 grass_prototypes = build_grass_prototypes()
 trees = spawn_trees(tree_prototypes)

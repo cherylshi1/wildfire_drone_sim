@@ -843,42 +843,44 @@ def run_collaboration_score_self_test():
             break
         update_simulation_frame(SelfTestTask(), 0.5)
 
-    # --- base = P1-P4 mission performance, no operator action yet -------------
-    # Aug 9, 2026: the fixed 40/67 water tier is gone. The base IS the round's
-    # P1-P4 performance out of 100, so a hands-off round scores exactly its base.
+    # --- base = CALIBRATED mission score, no operator action yet --------------
+    # Aug 18, 2026: the base is the raw P1-P4 shifted so this stage's hands-off
+    # baseline lands on the common anchor. A hands-off round therefore scores
+    # exactly its calibrated base, and only operator actions move it off.
     reset_round_suppression_work()
-    performance = compute_performance_matrix(motion_state.sim_time_seconds)
-    expected_base = clamp(performance["performance_score"] * 100.0, 0.0, 100.0)
+    # The calibration maps a stage's stored full-auto baseline onto the anchor.
+    assert abs(
+        calibrate_mission_score(STAGE_FULL_AUTO_BASELINE_SCORES[3])
+        - CALIBRATION_ANCHOR_SCORE
+    ) < 1e-6
+    expected_base = calibrate_mission_score(raw_mission_score())
     grade = compute_collaboration_score()
     assert abs(grade["base"] - expected_base) < 1e-6, (grade["base"], expected_base)
     assert grade["credit_total"] == 0.0, grade["credits"]
     assert grade["penalty_total"] == 0.0, grade["penalties"]
     assert abs(grade["score"] - grade["base"]) < 1e-6, grade["score"]
     assert compute_final_grade()["score"] == grade["score"]
-    assert collaboration_run_succeeded()
     baseline_base = grade["base"]
 
-    # --- operator credit: one fire's worth of manual [J] spray ---------------
+    # --- OUTCOME-ONLY (Aug 20, 2026): manual actions are RECORDED but do NOT
+    # move the score. The score always equals the calibrated mission outcome.
     full_work = (
         FIRE_SUPPRESSION_CONTAIN_DELAY_SECONDS
         + FIRE_SUPPRESSION_EXTINGUISH_DELAY_SECONDS
     )
     accumulate_round_suppression_work(0.0, full_work, full_work)
     grade = compute_collaboration_score()
+    # the spray credit is still computed for the report/CSV...
     assert (
         abs(grade["credits"]["suppression sprayed manually"]
             - COLLABORATION_MANUAL_SUPPRESSION_POINTS_PER_FIRE) < 1e-6
     ), grade["credits"]
-    assert abs(
-        grade["score"]
-        - clamp(baseline_base + COLLABORATION_MANUAL_SUPPRESSION_POINTS_PER_FIRE, 0.0, 100.0)
-    ) < 1e-6, grade["score"]
-    # Operator credit/cost is tracked through operator_delta from here on: the
-    # base is now the P1-P4 performance, which itself shifts when fires are added
-    # or drones are lost, so comparing raw scores would not isolate the operator.
-    delta_after_spray = grade["operator_delta"]
+    # ...but it does NOT change the score (this was the +56 farming bug).
+    assert abs(grade["score"] - baseline_base) < 1e-6, grade["score"]
+    assert abs(grade["score"] - grade["base"]) < 1e-6, grade["score"]
 
-    # --- operator credit: a fire found while flying by hand ------------------
+    # --- a fire found while flying by hand: recorded as a count; the score
+    # follows only the mission outcome (which shifts because a fire was added).
     set_control_mode(CONTROL_MODE_MANUAL)
     fire_x = drone.getX() + 4.0
     fire_y = drone.getY() + 4.0
@@ -896,29 +898,18 @@ def run_collaboration_score_self_test():
     )
     assert manual_hotspot.detected_under_manual_control
     grade = compute_collaboration_score()
-    assert (
-        abs(grade["credits"]["fires found flying manually"]
-            - COLLABORATION_MANUAL_DETECTION_POINTS) < 1e-6
-    ), grade["credits"]
-    # Finding a fire by hand adds exactly the detection credit to operator_delta.
-    assert abs(
-        grade["operator_delta"]
-        - (delta_after_spray + COLLABORATION_MANUAL_DETECTION_POINTS)
-    ) < 1e-6, grade["operator_delta"]
-    delta_before_loss = grade["operator_delta"]
+    assert grade["manual_detection_count"] >= 1, grade["manual_detection_count"]
+    # the score is exactly the calibrated mission outcome, no action bonus.
+    assert abs(grade["score"] - grade["base"]) < 1e-6, grade["score"]
 
-    # --- operator cost: a drone lost -----------------------------------------
+    # --- a drone lost: recorded as a count, does not change the score by
+    # itself (losing a drone does not alter the mission outcome directly).
+    base_before_loss = grade["base"]
     mark_drone_damaged("survey", 2, show_alert=False)
     grade = compute_collaboration_score()
-    assert (
-        abs(grade["penalties"]["drones lost"]
-            - COLLABORATION_DRONE_LOSS_PENALTY_POINTS) < 1e-6
-    ), grade["penalties"]
-    # Losing a drone subtracts exactly the loss penalty from operator_delta.
-    assert abs(
-        grade["operator_delta"]
-        - (delta_before_loss - COLLABORATION_DRONE_LOSS_PENALTY_POINTS)
-    ) < 1e-6, grade["operator_delta"]
+    assert grade["drones_lost"] >= 1, grade["drones_lost"]
+    assert abs(grade["score"] - grade["base"]) < 1e-6, grade["score"]
+    assert abs(grade["base"] - base_before_loss) < 1e-6, (grade["base"], base_before_loss)
 
     # --- the composite no longer moves with team size ------------------------
     performance = compute_performance_matrix(motion_state.sim_time_seconds)
@@ -1060,7 +1051,20 @@ def run_sensor_visibility_self_test():
     set_camera_target_role_slot("survey", 1)
     refresh_operator_fire_visibility()
     assert thermal_view_enabled
+    # Aug 11: an undetected fire is only revealed when a survey drone is within
+    # detection range, so a fire no drone is near stays hidden even in the
+    # survey view (was: survey view always showed every fire).
+    drone.setPos(fire_x + 400.0, fire_y + 400.0, drone.getZ())
+    refresh_operator_fire_visibility()
+    assert hotspot.root.isHidden()
+    # Put survey drone 1 over the fire -> it comes into range and reveals.
+    drone.setPos(fire_x, fire_y, drone.getZ())
+    refresh_operator_fire_visibility()
     assert not hotspot.root.isHidden()
+    # Fly it back out of range -> hidden again.
+    drone.setPos(fire_x + 400.0, fire_y + 400.0, drone.getZ())
+    refresh_operator_fire_visibility()
+    assert hotspot.root.isHidden()
 
     set_camera_target_role_slot("water", 1)
     refresh_operator_fire_visibility()

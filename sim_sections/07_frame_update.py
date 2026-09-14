@@ -10,6 +10,10 @@ def update_simulation_frame(task, dt):
     global burn_eta_update_accumulator_seconds
     global pregame_update_accumulator_seconds
 
+    # The drone roster is fixed during a round; refresh the cached view list
+    # once per frame so the dozens of per-frame lookups all reuse one build.
+    invalidate_drone_views_cache()
+
     if pregame_active:
         refresh_tx12_controller_device()
         clear_water_hud_target_reticle()
@@ -435,16 +439,10 @@ def update_simulation_frame(task, dt):
         apply_hover_all_freeze()
     update_collision_alert_overlay()
     update_hotspot_lifecycle(dt)
-    if (
-        (overview_camera_enabled and overview_is_operator)
-        or (
-            get_selected_drone_view() is not None
-            and get_selected_drone_view()["role"] == "water"
-        )
-    ):
-        # Keep undetected fire hidden in non-thermal operator views; reveal it
-        # the instant a survey drone detects it.
-        refresh_operator_fire_visibility()
+    # Reveal undetected fire only while a survey drone is within detection range
+    # (thermal sees nearby heat); keep it hidden everywhere else. Runs every
+    # frame so fires pop in/out as the drones move, not just on view change.
+    refresh_operator_fire_visibility()
     fire_effect_update_accumulator_seconds += dt
     if fire_effect_update_accumulator_seconds >= FIRE_EFFECT_UPDATE_INTERVAL_SECONDS:
         update_hotspot_effect_animation(fire_effect_update_accumulator_seconds)
