@@ -34,6 +34,13 @@ Required for the main simulation:
 - `calibration_baselines.json`
 - `scenario_seeds.json`
 
+The shared `models/` folder includes the runtime fire assets used by the
+simulation:
+
+- `models/fire_baked_frames/`
+- `models/fire_baked_mesh_frames/`
+- `models/fire_render_set/`
+
 Useful but optional:
 
 - `main_fast.py`, `main_3min.py`, `main_10min.py` - convenience launch modes
@@ -41,8 +48,9 @@ Useful but optional:
 - `CITATION.cff` - machine-readable citation metadata
 - `LICENSE.md` - reuse restrictions
 
-Local-only folders such as old experiments, raw fire-model sources, notes, and
-participant reports are intentionally not part of the public runnable release.
+Local-only folders such as old experiments, the large raw `fire model/` source
+folder, notes, and participant reports are intentionally not part of the public
+runnable release.
 
 ## Repository Layout
 

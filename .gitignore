@@ -6,8 +6,6 @@ __pycache__/
 # Local-only source/intermediate assets. The public repo keeps the smaller
 # runtime release instead of raw source assets and old experiments.
 fire model/
-models/fire_baked_mesh_frames/
-models/fire_render_set/
 notes/
 random_files/
 dna.txt
