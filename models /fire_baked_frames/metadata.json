@@ -1,0 +1,14 @@
+{
+  "frame_count": 200,
+  "frame_rate": 24.0,
+  "resolution": 256,
+  "source_frame_step": 1,
+  "projection_axis": "y",
+  "heat_scale": 22.837535858154297,
+  "crop_box": [
+    0,
+    21,
+    313,
+    191
+  ]
+}
